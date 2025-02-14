@@ -86,16 +86,15 @@ def insert_values(ti):
 
 # DAG Implementation
 
-default_args = {
-    'owner' : 'Alex'
-}
-
 with DAG(
     dag_id = 'python_pipeline_insurance_ETL',
     description = 'Insurance dataset ETL utilizing Python / SQL',
-    default_args = default_args,
-    start_date = days_ago(1),
-    schedule_interval = None,
+    default_args = {'owner' : 'Alex'},
+    start_date = days_ago(7),
+    catchup = True,
+    schedule_interval = '0 */7 * * 0,2',
+    # Demo catchup utilizing cron expression (min/hour/day/month/day of week)
+    # Example above: top of the hour, every 7th hour, every day of the month, every month, Sun and Tue
     tags = ['python', 'SQL', 'extract', 'transform', 'load', 'pipeline']
 ) as dag:
     
