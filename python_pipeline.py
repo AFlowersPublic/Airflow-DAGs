@@ -9,12 +9,15 @@ from airflow.utils.dates import days_ago
 from airflow import DAG
 from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.operators.sqlite_operator import SqliteOperator
+from airflow.models import Variable
 
 
-data_directory = Path(__file__).parent / 'data_export'
+DATA_DIRECTORY = Path(__file__).parent / 'data_export'
 
 def extract_data():
-    df = pd.read_csv('https://raw.githubusercontent.com/AFlowersPublic/Airflow-DAGs/refs/heads/main/datasets/insurance.csv')
+    df = pd.read_csv(Variable.get('var_URL', \
+        default_var='https://raw.githubusercontent.com/AFlowersPublic/Airflow-DAGs/refs/heads/main/datasets/insurance.csv'))
+    # Demonstration to show reading var from Airflow config
     print(df)
     return df.to_json()
 
@@ -37,7 +40,7 @@ def decision():
         return 'reportOut_region'
 
 def directory_init():
-    data_directory.mkdir(exist_ok=True)
+    DATA_DIRECTORY.mkdir(exist_ok=True)
 
 def reportOut_smoker(ti):
     json_data = ti.xcom_pull(task_ids='remove_null_values')
@@ -49,7 +52,7 @@ def reportOut_smoker(ti):
         'charges': 'mean'
     }).reset_index()
 
-    smoker_df.to_csv(data_directory/'grouped_by_smoker.csv', index=False)
+    smoker_df.to_csv(DATA_DIRECTORY/'grouped_by_smoker.csv', index=False)
 
 def reportOut_region(ti):
     json_data = ti.xcom_pull(task_ids='remove_null_values')
@@ -61,7 +64,7 @@ def reportOut_region(ti):
         'charges': 'mean'
     }).reset_index()
 
-    regions_df.to_csv(data_directory/'grouped_by_region.csv', index=False)
+    regions_df.to_csv(DATA_DIRECTORY/'grouped_by_region.csv', index=False)
 
 def insert_values(ti):
     json_data = ti.xcom_pull(task_ids='remove_null_values')
@@ -130,6 +133,7 @@ with DAG(
         # but leaving just so I can have the quick refresher on SQL in Airflow
         task_id = 'create_table',
         sqlite_conn_id = 'ins_sqlite_database',
+        # Set in Airflow connections
         sql = r'''
             CREATE TABLE IF NOT EXISTS insurance_charges (
                 id          INTEGER PRIMARY KEY,
