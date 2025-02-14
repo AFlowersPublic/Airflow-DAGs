@@ -10,7 +10,8 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.operators.sqlite_operator import SqliteOperator
 from airflow.models import Variable
-
+from airflow.utils.task_group import TaskGroup
+from airflow.utils.edgemodifier import Label
 
 DATA_DIRECTORY = Path(__file__).parent / 'data_export'
 
@@ -35,9 +36,9 @@ def remove_null_values(ti):
 def decision():
     # An unneccesary function designed to demonstrate flow control within Airflow.
     if choice([True, False]):
-        return 'reportOut_smoker'
+        return 'reporting.reportOut_smoker'
     else:
-        return 'reportOut_region'
+        return 'reporting.reportOut_region'
 
 def directory_init():
     DATA_DIRECTORY.mkdir(exist_ok=True)
@@ -118,48 +119,52 @@ with DAG(
         python_callable = decision
     )
 
-    reportOut_smoker = PythonOperator(
-        task_id='reportOut_smoker',
-        python_callable=reportOut_smoker
-    )
+    with TaskGroup(group_id='reporting') as reporting:
+        reportOut_smoker = PythonOperator(
+            task_id='reportOut_smoker',
+            python_callable=reportOut_smoker
+        )
 
-    reportOut_region = PythonOperator(
-        task_id='reportOut_region',
-        python_callable=reportOut_region
-    )
+        reportOut_region = PythonOperator(
+            task_id='reportOut_region',
+            python_callable=reportOut_region
+        )
 
-    create_table = SqliteOperator(
-        # This actually should be completely removed, and allow pd to handle the schema,
-        # but leaving just so I can have the quick refresher on SQL in Airflow
-        task_id = 'create_table',
-        sqlite_conn_id = 'ins_sqlite_database',
-        # Set in Airflow connections
-        sql = r'''
-            CREATE TABLE IF NOT EXISTS insurance_charges (
-                id          INTEGER PRIMARY KEY,
-                age         INTEGER,
-                sex         TEXT CHECK( sex IN ('male','female') ),
-                bmi         REAL,
-                children    INTEGER,
-                smoker      TEXT CHECK( smoker IN ('yes','no') ),
-                region      TEXT CHECK( region IN ('southwest', 'southeast', 'northwest', 'northeast') ),
-                charges     REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        '''
-    )
+    with TaskGroup(group_id='database_ops') as database_ops:
+        create_table = SqliteOperator(
+            # This actually should be completely removed, and allow pd to handle the schema,
+            # but leaving just so I can have the quick refresher on SQL in Airflow
+            task_id = 'create_table',
+            sqlite_conn_id = 'ins_sqlite_database',
+            # Set in Airflow connections
+            sql = r'''
+                CREATE TABLE IF NOT EXISTS insurance_charges (
+                    id          INTEGER PRIMARY KEY,
+                    age         INTEGER,
+                    sex         TEXT CHECK( sex IN ('male','female') ),
+                    bmi         REAL,
+                    children    INTEGER,
+                    smoker      TEXT CHECK( smoker IN ('yes','no') ),
+                    region      TEXT CHECK( region IN ('southwest', 'southeast', 'northwest', 'northeast') ),
+                    charges     REAL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            '''
+        )
 
-    insert_values = PythonOperator(
-        task_id = 'insert_values',
-        python_callable = insert_values,
-    )
+        insert_values = PythonOperator(
+            task_id = 'insert_values',
+            python_callable = insert_values,
+        )
 
-    display_result = SqliteOperator(
-        task_id = 'display_result',
-        sqlite_conn_id = 'ins_sqlite_database',
-        sql= r'''SELECT * FROM insurance_charges''',
-        do_xcom_push = True
-    )
+        display_result = SqliteOperator(
+            task_id = 'display_result',
+            sqlite_conn_id = 'ins_sqlite_database',
+            sql= r'''SELECT * FROM insurance_charges''',
+            do_xcom_push = True
+        )
 
-extract_data >> [remove_null_values, directory_init] >> decision >> [reportOut_smoker, reportOut_region]
-remove_null_values >> create_table >> insert_values >> display_result
+        create_table >> insert_values >> display_result
+
+extract_data >> [remove_null_values, directory_init] >> decision >> reporting
+remove_null_values >> Label('cleaned data') >> database_ops
