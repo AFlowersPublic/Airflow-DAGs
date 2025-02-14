@@ -1,1 +1,1 @@
-Repository for simple implementation of Airflow for data ETL utilizing Python, SQL, and Bash Scripting
+Implementation of Airflow demonstrating ETL utilizing Python and SQL, with flow control concepts included.

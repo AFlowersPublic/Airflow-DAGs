@@ -1,17 +1,17 @@
 import pandas as pd
 import sqlite3
 from pathlib import Path
+from random import choice
 
 from datetime import datetime, timedelta
 from airflow.utils.dates import days_ago
 
 from airflow import DAG
-
-from airflow.operators.python import PythonOperator
+from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.operators.sqlite_operator import SqliteOperator
 
+
 data_directory = Path(__file__).parent / 'data_export'
-data_directory.mkdir(exist_ok=True)
 
 def extract_data():
     df = pd.read_csv('https://raw.githubusercontent.com/AFlowersPublic/Airflow-DAGs/refs/heads/main/datasets/insurance.csv')
@@ -29,7 +29,17 @@ def remove_null_values(ti):
 
     return df.to_json()
 
-def groupby_smoker(ti):
+def decision():
+    # An unneccesary function designed to demonstrate flow control within Airflow.
+    if choice([True, False]):
+        return 'reportOut_smoker'
+    else:
+        return 'reportOut_region'
+
+def directory_init():
+    data_directory.mkdir(exist_ok=True)
+
+def reportOut_smoker(ti):
     json_data = ti.xcom_pull(task_ids='remove_null_values')
     df = pd.read_json(json_data)
 
@@ -41,7 +51,7 @@ def groupby_smoker(ti):
 
     smoker_df.to_csv(data_directory/'grouped_by_smoker.csv', index=False)
 
-def groupby_region(ti):
+def reportOut_region(ti):
     json_data = ti.xcom_pull(task_ids='remove_null_values')
     df = pd.read_json(json_data)
 
@@ -58,8 +68,17 @@ def insert_values(ti):
     df = pd.read_json(json_data)
     
     conn = sqlite3.connect(Path(__file__).parent / 'database/ins_sqlite.db')
+    
+    try:
+        df_old = pd.read_sql_table('insurance_charges',conn,index_col='id')
+    except NotImplementedError:
+        pass
+    else:
+        df = pd.merge_ordered(df_old, df)
+        # Notice! This is not a practical way to compare/merge these two tables.
+        # In a real world example, would compare across a unique identifier if one was provided.
 
-    df.to_sql('insurance_charges',conn,if_exists='append',index_label='id')
+    df.to_sql('insurance_charges',conn,if_exists='replace',index_label='id')
 
 # DAG Implementation
 
@@ -81,19 +100,29 @@ with DAG(
         python_callable=extract_data
     )
 
+    directory_init = PythonOperator(
+        task_id='directory_init',
+        python_callable=directory_init
+    )
+
     remove_null_values = PythonOperator(
         task_id='remove_null_values',
         python_callable=remove_null_values
     )
 
-    groupby_smoker = PythonOperator(
-        task_id='groupby_smoker',
-        python_callable=groupby_smoker
+    decision = BranchPythonOperator(
+        task_id = 'decision',
+        python_callable = decision
     )
 
-    groupby_region = PythonOperator(
-        task_id='groupby_region',
-        python_callable=groupby_region
+    reportOut_smoker = PythonOperator(
+        task_id='reportOut_smoker',
+        python_callable=reportOut_smoker
+    )
+
+    reportOut_region = PythonOperator(
+        task_id='reportOut_region',
+        python_callable=reportOut_region
     )
 
     create_table = SqliteOperator(
@@ -128,5 +157,5 @@ with DAG(
         do_xcom_push = True
     )
 
-extract_data >> remove_null_values >> [groupby_smoker, groupby_region, create_table]
-create_table >> insert_values >> display_result
+extract_data >> [remove_null_values, directory_init] >> decision >> [reportOut_smoker, reportOut_region]
+remove_null_values >> create_table >> insert_values >> display_result
